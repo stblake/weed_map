@@ -262,38 +262,6 @@ def image_spectra_diff(image, spectra, classification):
 
 
 
-@jit(nopython=True,fastmath=True)
-def image_spectra_diff_weighted(image, spectra, weights, classification):
-    """Computes the RMSE of each pixel in the image with the sample spectra datasets."""
-
-    nrows,ncols = classification.shape
-
-    weight_sum = np.sum(weights)
-
-    for i in range(nrows):
-        for j in range(ncols):
-
-            spectra_min = 1.
-            spectra_weight = 0.
-
-            for s,w in zip(spectra, weights):
-                # root-mean-square error
-                diff = (image[i,j,0] - s[0])**2 + \
-                       (image[i,j,1] - s[1])**2 + \
-                       (image[i,j,2] - s[2])**2
-                diff /= 3.
-                diff = np.sqrt(diff)
-                # min error -- our analogue for the closest spectral match
-                if diff < spectra_min:
-                    spectra_min = diff
-                    spectra_weight = w
-
-            classification[i,j] = (spectra_weight/weight_sum)*spectra_min
-
-    return
-
-
-
 def denoise(image, morph_close = 20, morph_open = 20):
     """denoise requires a 4-channel BGRA image."""
     img_bw = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
@@ -324,12 +292,13 @@ def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, sa
                      template_blur_kernel_size = (3,3), 
                      template_resize_size = (16,16), 
                      n_sigma_thresholds = [1,2,3], 
-                     duplicate_tolerance = 5, 
+                     duplicate_tolerance = 1, 
+                     common_tolerance = 1, 
                      morph_close = 20, 
                      morph_open = 20,
                      equalise = True, 
                      denoise_classification_map = True, 
-                     dilation_size = 100, 
+                     dilation_size = 0, 
                      half_normal_dist = False,
                      imagery_id = None,
                      export_histogram = False, 
@@ -396,7 +365,7 @@ def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, sa
 
     # Remove similar spectra common to both weeds and crop. 
     samples_A_preprocessed, samples_B_preprocessed = remove_common_spectra(\
-          samples_A_preprocessed, samples_B_preprocessed, tol = duplicate_tolerance)
+          samples_A_preprocessed, samples_B_preprocessed, tol = common_tolerance)
     
     # Remove near duplicates. 
     samples_A_preprocessed, samples_A_weights = remove_near_duplicate_spectra(\
@@ -444,9 +413,6 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
 
     image_spectra_diff(image_pre, samples_A_preprocessed, density_A)
     image_spectra_diff(image_pre, samples_B_preprocessed, density_B)
-
-    # image_spectra_diff_weighted(image_pre, samples_A_preprocessed, samples_A_weights, density_A)
-    # image_spectra_diff_weighted(image_pre, samples_B_preprocessed, samples_B_weights, density_B)
 
     # Experimental - limit range of outliers. 
     ### threshold = np.percentile(density_A, 10.)
@@ -592,28 +558,65 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
 
     # Dilate to generate spray region (an overestimate of the area enclosing the weeds.) The array 
     # spray_region is a binary image, where 0 -> no spray, 1 -> spray. 
-    ### spray_region = np.zeros((image.shape[0], image.shape[1]), dtype = np.uint8)
-    ### spray_region[density < mean - max(n_sigma_thresholds)*std] = 1
 
-    ### denoise_kernel = np.ones((dilation_size//10, dilation_size//10), dtype = np.uint8)
-    ### spray_region = cv2.dilate(spray_region, denoise_kernel, iterations = 1)
+    if dilation_size > 0:
+        denoise_kernel = np.ones((dilation_size, dilation_size), dtype = np.uint8)
+        classification_binary = cv2.dilate(classification_binary, denoise_kernel, iterations = 1)
+        classification_binary[classification_binary != 0] = 1 # Binarise. 
 
-    ### if plotting:
-    ###     fig, ax = plt.subplots()
-    ###     im = ax.imshow(spray_region, interpolation='bilinear', cmap='Pastel1_r',
-    ###                    origin='upper', vmin=0., vmax=1.)
-    ###     ax.axis('off')
-    ###     plt.title(f'{id_str} - Spray Region')
-    ###     plt.colorbar(im,fraction=0.046*spray_region.shape[0]/spray_region.shape[1], pad=0.04)
-    ###     plt.savefig(f'{id_str}_SPRAY_REGION.PNG')
-    ###     plt.show() 
+    if plotting:
+        fig, ax = plt.subplots()
+        im = ax.imshow(classification_binary, interpolation='bilinear', cmap='Pastel1_r',
+                    origin='upper', vmin=0., vmax=1.)
+        ax.axis('off')
+        plt.title(f'{id_str} - Spray Region')
+        plt.colorbar(im,fraction=0.046*classification_binary.shape[0]/classification_binary.shape[1], pad=0.04)
+        plt.savefig(f'{id_str}_SPRAY_REGION.PNG')
+        plt.show() 
 
     return density, classification_image, classification_binary
 
 
 
 
+def model_post_process(image_filename, \
+    morph_open = 10, morph_close = 10, \
+    n_median_filter = 3, \
+    dilation_kernel_size = 5, dilate_iterations = 1):
+    
+    dataset = rasterio.open(image_filename)
+    img_bw = dataset.read(1).copy()
 
+    # Denoise. 
+    # se1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_close, morph_close))
+    # se2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_open, morph_open))
+
+    # mask = cv2.morphologyEx(img_bw, cv2.MORPH_CLOSE, se1)
+    # mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, se2)
+    # mask = mask < 255    
+    # img_bw *= mask
+    
+    img_bw = cv2.medianBlur(img_bw, n_median_filter)
+    
+    # Dilate.
+    kernel = np.ones((dilation_kernel_size, dilation_kernel_size), np.uint8)
+    img_bw = cv2.dilate(img_bw, kernel, iterations=dilate_iterations)
+    
+    # Export classification map to GeoTIFF.
+    output_filename = image_filename.replace('.tif',f'_DENOISED.tif')
+
+    kwargs = dataset.meta
+    kwargs.update(
+        dtype=rasterio.uint8,
+        count=1,
+        compress='lzw')
+
+    _,img_binarized = cv2.threshold(img_bw, 254, 255, cv2.THRESH_BINARY)
+    
+    with rasterio.open(output_filename, 'w', **kwargs) as dst:
+        dst.write_band(1, img_binarized)
+    
+    return
 
 
 
