@@ -24,7 +24,8 @@ plt.rcParams["figure.figsize"] = (10, 6)
 
 # Some quick plotting routines. 
 
-def show_greyscale_image(image, title = None, axis = 'off'):
+def show_greyscale_image(image, title = None, axis = 'off', 
+    save_figure = False, file_name = 'temp', file_extension = 'PNG'):
     """Quick plotting routine for greyscale images using matplotlib. \
     Options are title = None, axis = 'off'."""
     fig, ax = plt.subplots() 
@@ -32,13 +33,16 @@ def show_greyscale_image(image, title = None, axis = 'off'):
     ax.axis(axis)
     if title is not None:
         ax.set_title(title)
+    if save_figure:
+        plt.savefig(f'{file_name}.{file_extension}')
     plt.ioff()
     plt.show()
     return
 
 
 
-def show_bgr_image(image, title = None, axis = 'off'):
+def show_bgr_image(image, title = None, axis = 'off', 
+    save_figure = False, file_name = 'temp', file_extension = 'PNG'):
     """Quick plotting routine for BGR images using matplotlib. \
     Options are title = None, axis = 'off'."""
     fig, ax = plt.subplots() 
@@ -46,13 +50,16 @@ def show_bgr_image(image, title = None, axis = 'off'):
     ax.axis(axis)
     if title is not None:
         ax.set_title(title)
+    if save_figure:
+        plt.savefig(f'{file_name}.{file_extension}')
     plt.ioff()
     plt.show()
     return
 
 
 
-def show_hls_image(image, title = None, axis = 'off'):
+def show_hls_image(image, title = None, axis = 'off', 
+    save_figure = False, file_name = 'temp', file_extension = 'PNG'):
     """Quick plotting routine for HLS images using matplotlib. \
     Options are title = None, axis = 'off'."""
     fig, ax = plt.subplots() 
@@ -60,13 +67,16 @@ def show_hls_image(image, title = None, axis = 'off'):
     ax.axis(axis)
     if title is not None:
         ax.set_title(title)
+    if save_figure:
+        plt.savefig(f'{file_name}.{file_extension}')
     plt.ioff()
     plt.show()
     return
 
 
 
-def show_lab_image(image, title = None, axis = 'off'):
+def show_lab_image(image, title = None, axis = 'off', 
+    save_figure = False, file_name = 'temp', file_extension = 'PNG'):
     """Quick plotting routine for Lab images using matplotlib. \
     Options are title = None, axis = 'off'."""
     fig, ax = plt.subplots() 
@@ -74,13 +84,16 @@ def show_lab_image(image, title = None, axis = 'off'):
     ax.axis(axis)
     if title is not None:
         ax.set_title(title)
+    if save_figure:
+        plt.savefig(f'{file_name}.{file_extension}')
     plt.ioff()
     plt.show()
     return
 
 
 
-def show_bgra_image(image, title = None, axis = 'off'):
+def show_bgra_image(image, title = None, axis = 'off', 
+    save_figure = False, file_name = 'temp', file_extension = 'PNG'):
     """Quick plotting routine for BGRA (blue, green, red, alpha) images \
     using matplotlib. Options are title = None, axis = 'off'."""
     fig, ax = plt.subplots() 
@@ -88,13 +101,16 @@ def show_bgra_image(image, title = None, axis = 'off'):
     ax.axis(axis)
     if title is not None:
         ax.set_title(title)
+    if save_figure:
+        plt.savefig(f'{file_name}.{file_extension}')
     plt.ioff()
     plt.show()
     return
 
 
 
-def heatmap(image, cmap = 'hot_r', colorbar = False, title = None, axis = 'off'):
+def heatmap(image, cmap = 'hot_r', colorbar = False, title = None, axis = 'off', 
+    save_figure = False, file_name = 'temp', file_extension = 'PNG'):
     """Quick plotting routine for heat maps using matplotlib. \
     Options are colorbar = False, title = None, axis = 'off'."""
     fig, ax = plt.subplots()
@@ -104,6 +120,8 @@ def heatmap(image, cmap = 'hot_r', colorbar = False, title = None, axis = 'off')
         plt.colorbar(im, fraction=0.046*image.shape[0]/image.shape[1], pad=0.04)
     if title is not None:
         ax.set_title(title)
+    if save_figure:
+        plt.savefig(f'{file_name}.{file_extension}')
     plt.ioff()
     plt.show()
     return 
@@ -262,7 +280,7 @@ def image_spectra_diff(image, spectra, classification):
 
 
 
-def denoise(image, morph_close = 20, morph_open = 20):
+def denoise(image, classification_confidence, morph_close = 20, morph_open = 20):
     """denoise requires a 4-channel BGRA image."""
     img_bw = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
     _,img_binarized = cv2.threshold(img_bw, 254, 255, cv2.THRESH_BINARY)
@@ -278,7 +296,10 @@ def denoise(image, morph_close = 20, morph_open = 20):
 
     denoised = image.copy()
     denoised[:,:,3] *= mask
-    return denoised
+
+    classification_confidence = np.where(mask, classification_confidence, 0)
+
+    return denoised, classification_confidence
 
 
 
@@ -517,8 +538,8 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         print(f'mean = {mean:.4f}, std = {std:.4f}')
 
     # Compute percentage of image in each confidence interval (relative to entire image).
+    n_total_pixels = image.shape[0]*image.shape[1]
     if verbose: 
-        n_total_pixels = image.shape[0]*image.shape[1]
         n_pc_total = 0.
         for i,n_sigma in enumerate(n_sigma_thresholds,1):
             n_px = np.sum(density < mean - n_sigma*std)
@@ -536,45 +557,54 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
     classification_image = cv2.cvtColor(classification_image, cv2.COLOR_RGB2RGBA) # alpha channel
     classification_image[:,:,3] = 0
 
+    classification_confidence = np.zeros((image.shape[0], image.shape[1]), dtype = np.uint8)
+
     for i,n_sigma in enumerate(n_sigma_thresholds,1):
         classification_image[density < mean - n_sigma*std] = colours255[i]
+        classification_confidence[density < mean - n_sigma*std] = int(10*n_sigma)
 
     if plotting:
-        show_bgra_image(classification_image, title = f'{id_str} - Classification Map')
+        show_bgra_image(classification_image, title = f'{id_str} - Classification Map', \
+            save_figure = True, file_name = f'{id_str}_CLASSIFICATION_MAP')
 
     # Denoise classification map. 
     if denoise_classification_map:
-        classification_image = denoise(classification_image, morph_close = morph_close, morph_open = morph_open)
+        classification_image, classification_confidence = denoise(classification_image, classification_confidence, 
+            morph_close = morph_close, morph_open = morph_open)
         if plotting:
-            show_bgra_image(classification_image, title = f'{id_str} - Denoised Classification Map')
+            show_bgra_image(classification_image, title = f'{id_str} - Denoised Classification Map', \
+                save_figure = True, file_name = f'{id_str}_DENOISED_CLASSIFICATION_MAP')
 
-    # Create binary classification. 
-    classification_binary = np.zeros((image.shape[0], image.shape[1]), dtype = np.uint8)
-    classification_binary[classification_image[:,:,3] == 255] = 1
-
-    if plotting:
-        show_greyscale_image(255*classification_binary, title = f'{id_str} - Binary Classification Map')
-
+    # Create binary classification for spray region.  
+    spray_region = np.zeros((image.shape[0], image.shape[1]), dtype = np.uint8)
+    spray_region[classification_image[:,:,3] == 255] = 255
 
     # Dilate to generate spray region (an overestimate of the area enclosing the weeds.) The array 
-    # spray_region is a binary image, where 0 -> no spray, 1 -> spray. 
+    # spray_region is a binary image.
 
     if dilation_size > 0:
-        denoise_kernel = np.ones((dilation_size, dilation_size), dtype = np.uint8)
-        classification_binary = cv2.dilate(classification_binary, denoise_kernel, iterations = 1)
-        classification_binary[classification_binary != 0] = 1 # Binarise. 
+        # Dilation size should be odd. 
+        if dilation_size%2 == 0:
+            dilation_size += 1
+        dilation_kernel = np.ones((dilation_size, dilation_size), dtype = np.uint8)
+        spray_region = cv2.dilate(spray_region, dilation_kernel, iterations = 1)
+        spray_region[spray_region != 0] = 255 # Binarise. 
+
+    if verbose:
+        pc_sprayed = 100.*np.sum(spray_region == 255)/n_total_pixels
+        print(f'Spray region is {pc_sprayed:.2f} [%] of total region.')
 
     if plotting:
         fig, ax = plt.subplots()
-        im = ax.imshow(classification_binary, interpolation='bilinear', cmap='Pastel1_r',
+        im = ax.imshow(spray_region, interpolation='bilinear', cmap='Pastel1_r',
                     origin='upper', vmin=0., vmax=1.)
         ax.axis('off')
         plt.title(f'{id_str} - Spray Region')
-        plt.colorbar(im,fraction=0.046*classification_binary.shape[0]/classification_binary.shape[1], pad=0.04)
+        plt.colorbar(im,fraction=0.046*spray_region.shape[0]/spray_region.shape[1], pad=0.04)
         plt.savefig(f'{id_str}_SPRAY_REGION.PNG')
         plt.show() 
 
-    return density, classification_image, classification_binary
+    return density, classification_image, classification_confidence, spray_region
 
 
 
