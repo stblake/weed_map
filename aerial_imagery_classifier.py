@@ -435,18 +435,22 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
     image_spectra_diff(image_pre, samples_A_preprocessed, density_A)
     image_spectra_diff(image_pre, samples_B_preprocessed, density_B)
 
+    density_A = cv2.blur(density_A, template_blur_kernel_size)
+    density_B = cv2.blur(density_B, template_blur_kernel_size)
+
     # Experimental - limit range of outliers. 
-    ### threshold = np.percentile(density_A, 10.)
-    ### density_A[density_A > threshold] = threshold
-    ### threshold = np.percentile(density_B, 10.)
-    ### density_B[density_B > threshold] = threshold
+    threshold_A = np.mean(density_A) + 2.0*np.std(density_A)
+    threshold_B = np.mean(density_B) + 2.0*np.std(density_B)
+    threshold = min(threshold_A, threshold_B)
+    density_A[density_A > threshold] = np.nan
+    density_B[density_B > threshold] = np.nan
 
     density = density_A - density_B
     
     # Resize to original image size. 
-    density_A = cv2.resize(density_A, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_CUBIC)
-    density_B = cv2.resize(density_B, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_CUBIC)
-    density   = cv2.resize(density,   (image.shape[1], image.shape[0]), interpolation = cv2.INTER_CUBIC)
+    density_A = cv2.resize(density_A, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
+    density_B = cv2.resize(density_B, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
+    density   = cv2.resize(density,   (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
     
     # Mask no_data (0,0,0) for geotiff.
     image_sum = np.sum(input_image_bgr, axis = 2)
@@ -564,8 +568,20 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         classification_confidence[density < mean - n_sigma*std] = int(10*n_sigma)
 
     if plotting:
+        z_scored = density.copy()
+        z_scored = (density - mean)/std
+        fig, ax = plt.subplots()
+        im = ax.imshow(z_scored, interpolation='bilinear', cmap='RdBu',
+                       origin='upper',
+                       vmin=np.nanmin(z_scored), vmax=np.nanmax(z_scored))
+        ax.axis('off')
+        plt.title(f'{id_str} - Z-score of Classification Confidence')
+        plt.colorbar(im,fraction=0.046*z_scored.shape[0]/z_scored.shape[1], pad=0.04)
+        plt.show()
+
         show_bgra_image(classification_image, title = f'{id_str} - Classification Map', \
             save_figure = True, file_name = f'{id_str}_CLASSIFICATION_MAP')
+
 
     # Denoise classification map. 
     if denoise_classification_map:
