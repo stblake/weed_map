@@ -320,6 +320,7 @@ def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, sa
                      equalise = True, 
                      denoise_classification_map = True, 
                      dilation_size = 0, 
+                     limit_outliers = True, 
                      half_normal_dist = False,
                      imagery_id = None,
                      export_histogram = False, 
@@ -435,19 +436,22 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
     image_spectra_diff(image_pre, samples_A_preprocessed, density_A)
     image_spectra_diff(image_pre, samples_B_preprocessed, density_B)
 
+    # Experimental - smooth spectral match density.
     density_A = cv2.blur(density_A, template_blur_kernel_size)
     density_B = cv2.blur(density_B, template_blur_kernel_size)
 
     # Experimental - limit range of outliers. 
-    threshold_A = np.mean(density_A) + 2.0*np.std(density_A)
-    threshold_B = np.mean(density_B) + 2.0*np.std(density_B)
-    threshold = min(threshold_A, threshold_B)
-    density_A[density_A > threshold] = np.nan
-    density_B[density_B > threshold] = np.nan
+    if limit_outliers:
+        threshold_A = np.mean(density_A) + 2.0*np.std(density_A)
+        threshold_B = np.mean(density_B) + 2.0*np.std(density_B)
+        threshold = min(threshold_A, threshold_B)
+        density_A[density_A > threshold] = np.nan
+        density_B[density_B > threshold] = np.nan
 
     density = density_A - density_B
     
-    # Resize to original image size. 
+    # Resize to original image size. Using bi-linear interpolation here, and not a 
+    # higher order interpolation is important. 
     density_A = cv2.resize(density_A, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
     density_B = cv2.resize(density_B, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
     density   = cv2.resize(density,   (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
