@@ -26,9 +26,9 @@ def preprocess_dir():
 
 	for filename in image_filenames:
 		print(filename)
-		if 'PREPROCESSED' in filename:
+		if 'DOWNSAMPLED' in filename:
 			continue
-		output_filename = filename.replace(f'.{args.file_format}', f'_PREPROCESSED.{args.file_format}')
+		output_filename = filename.replace(f'.{args.file_format}', f'_DOWNSAMPLED.{args.file_format}')
 		if os.path.exists(output_filename):
 			continue
 

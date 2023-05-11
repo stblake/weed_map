@@ -235,7 +235,7 @@ def remove_near_duplicate_spectra(array, tol = 1):
     """Near-duplicate spectra will skew the results, so we remove them."""
     rounded = tol*np.rint(array/tol)
     _,indices,counts = np.unique(rounded, axis = 0, return_index = True, return_counts = True)
-    return array[indices], counts
+    return array[indices], counts/len(array)
 
 
 
@@ -280,6 +280,33 @@ def image_spectra_diff(image, spectra, classification):
 
 
 
+@jit(nopython=True,fastmath=True)
+def image_spectra_diff_weighted(image, spectra, weights, classification):
+    """Computes the RMSE of each pixel in the image with the sample spectra datasets."""
+
+    nrows,ncols = classification.shape
+
+    for i in range(nrows):
+        for j in range(ncols):
+
+            spectra_min = 1e10
+
+            for s,w in zip(spectra, weights):
+                # root-mean-square error
+                diff = (image[i,j,0] - s[0])**2 + \
+                       (image[i,j,1] - s[1])**2 + \
+                       (image[i,j,2] - s[2])**2
+                diff /= 3.
+                diff = np.sqrt(diff)/w
+                # min error -- our analogue for the closest spectral match
+                if diff < spectra_min:
+                    spectra_min = diff
+
+            classification[i,j] = spectra_min
+
+    return
+
+
 def denoise(image, classification_confidence, morph_close = 20, morph_open = 20):
     """denoise requires a 4-channel BGRA image."""
     img_bw = cv2.cvtColor(image, cv2.COLOR_BGRA2GRAY)
@@ -307,11 +334,14 @@ def denoise(image, classification_confidence, morph_close = 20, morph_open = 20)
 
 # Reference for Lab colour space: https://docs.opencv.org/4.x/de/d25/imgproc_color_conversions.html#color_convert_rgb_lab
 
-def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, samples_B_bgr, 
+def imagery_statistical_binary_classification(
+                     input_image_bgr, 
+                     samples_A_bgr, 
+                     samples_B_bgr, 
                      image_blur_kernel_size = (3,3),
                      image_resize_ratio = 10,
                      template_blur_kernel_size = (3,3), 
-                     template_resize_size = (16,16), 
+                     template_resize_size = 32, 
                      n_sigma_thresholds = [1,2,3], 
                      duplicate_tolerance = 1, 
                      common_tolerance = 1, 
@@ -347,9 +377,14 @@ def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, sa
         image_bgr = input_image_bgr.copy()
 
     # Convert from BGR to HSL. 
-    image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2Lab)
-    samples_A = [cv2.cvtColor(sample, cv2.COLOR_BGR2Lab) for sample in samples_A_bgr]
-    samples_B = [cv2.cvtColor(sample, cv2.COLOR_BGR2Lab) for sample in samples_B_bgr]
+    #image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2Lab)
+    #samples_A = [cv2.cvtColor(sample, cv2.COLOR_BGR2Lab) for sample in samples_A_bgr]
+    #samples_B = [cv2.cvtColor(sample, cv2.COLOR_BGR2Lab) for sample in samples_B_bgr]
+
+    image = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2HLS)
+    samples_A = [cv2.cvtColor(sample, cv2.COLOR_BGR2HLS) for sample in samples_A_bgr]
+    samples_B = [cv2.cvtColor(sample, cv2.COLOR_BGR2HLS) for sample in samples_B_bgr]
+
 
     # Check shape of input image. (Should be a BGR, 3-channel image.)
     if len(image.shape) != 3 or image.shape[-1] != 3:
@@ -370,15 +405,17 @@ def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, sa
     # Prepare weed and crop images. 
     samples_A_preprocessed = []
     for sample in samples_A:
+        size = (template_resize_size, int(float(sample.shape[1])/sample.shape[0]*template_resize_size))
         pre = cv2.blur(sample, template_blur_kernel_size)
-        pre = cv2.resize(pre, template_resize_size, interpolation = cv2.INTER_AREA)
+        pre = cv2.resize(pre, size, interpolation = cv2.INTER_AREA)
         samples_A_preprocessed.append(pre.reshape(-1,3))
     samples_A_preprocessed = np.concatenate(samples_A_preprocessed, axis = 0)
-    
+
     samples_B_preprocessed = []
     for sample in samples_B:
+        size = (template_resize_size, int(float(sample.shape[1])/sample.shape[0]*template_resize_size))
         pre = cv2.blur(sample, template_blur_kernel_size)
-        pre = cv2.resize(pre, template_resize_size, interpolation = cv2.INTER_AREA)
+        pre = cv2.resize(pre, size, interpolation = cv2.INTER_AREA)
         samples_B_preprocessed.append(pre.reshape(-1,3))
     samples_B_preprocessed = np.concatenate(samples_B_preprocessed, axis = 0)
     
@@ -399,12 +436,25 @@ def imagery_statistical_binary_classification(input_image_bgr, samples_A_bgr, sa
     # and possibly abort. This would prevent misuse. 
 
     if plotting:
-        plot_spectra_table_lab(samples_A_preprocessed, title = f'{id_str} - distinct spectra of sample A')
-        plot_spectra_table_lab(samples_B_preprocessed, title = f'{id_str} - distinct spectra of sample B')
+        # plot_spectra_table_lab(samples_A_preprocessed, title = f'{id_str} - distinct spectra of sample A')
+        # plot_spectra_table_lab(samples_B_preprocessed, title = f'{id_str} - distinct spectra of sample B')
 
-    samples_A_preprocessed /= np.sqrt(3)*255. # Make BGR vector a unit vector. 
-    samples_B_preprocessed /= np.sqrt(3)*255.
-  
+        plot_spectra_table_hls(samples_A_preprocessed, title = f'{id_str} - distinct spectra of sample A')
+        plot_spectra_table_hls(samples_B_preprocessed, title = f'{id_str} - distinct spectra of sample B')
+
+    # Normalise Lab. 
+    # samples_A_preprocessed /= np.sqrt(3)*255. 
+    # samples_B_preprocessed /= np.sqrt(3)*255.
+
+    # Normalise HLS.  
+    samples_A_preprocessed[:,0] /= 255.
+    samples_A_preprocessed[:,1] /= 255.
+    samples_A_preprocessed[:,2] /= 180.
+
+    samples_B_preprocessed[:,0] /= 255.
+    samples_B_preprocessed[:,1] /= 255.
+    samples_B_preprocessed[:,2] /= 180.
+
     if len(samples_A_preprocessed) == 0 or len(samples_B_preprocessed) == 0:
         print(f'ERROR: sample spectra are not sufficiently distinct for classification. Perhaps \
 try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}.')
@@ -424,17 +474,26 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         image_pre = image.copy()
 
     if plotting:
-        show_lab_image(image_pre, title = f'{id_str} - preprocessed image')
+        # show_lab_image(image_pre, title = f'{id_str} - preprocessed image')
+        show_hls_image(image_pre, title = f'{id_str} - preprocessed image')
 
     image_pre = image_pre.astype(np.float32)
-    image_pre /= np.sqrt(3)*255. # All BGR vectors in the image are now unit vectors. 
+    # image_pre /= np.sqrt(3)*255. # Normalise for Lab.
     
+    # Normalise for HLS. 
+    image_pre[:,:,0] /= 255.
+    image_pre[:,:,1] /= 255.
+    image_pre[:,:,2] /= 180.
+
     # Compute classification based on spectral differences. 
     density_A = np.zeros((image_pre.shape[0], image_pre.shape[1]), dtype = np.float32)
     density_B = np.zeros((image_pre.shape[0], image_pre.shape[1]), dtype = np.float32)
 
-    image_spectra_diff(image_pre, samples_A_preprocessed, density_A)
-    image_spectra_diff(image_pre, samples_B_preprocessed, density_B)
+    # image_spectra_diff(image_pre, samples_A_preprocessed, density_A)
+    # image_spectra_diff(image_pre, samples_B_preprocessed, density_B)
+
+    image_spectra_diff_weighted(image_pre, samples_A_preprocessed, samples_A_weights, density_A)
+    image_spectra_diff_weighted(image_pre, samples_B_preprocessed, samples_B_weights, density_B)
 
     # Experimental - smooth spectral match density.
     density_A = cv2.blur(density_A, template_blur_kernel_size)
@@ -448,6 +507,10 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         density_A[density_A > threshold] = np.nan
         density_B[density_B > threshold] = np.nan
 
+    # Experimental
+    density_A = (density_A - np.mean(density_A))/np.std(density_A)
+    density_B = (density_B - np.mean(density_B))/np.std(density_B)
+
     density = density_A - density_B
     
     # Resize to original image size. Using bi-linear interpolation here, and not a 
@@ -455,10 +518,16 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
     density_A = cv2.resize(density_A, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
     density_B = cv2.resize(density_B, (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
     density   = cv2.resize(density,   (image.shape[1], image.shape[0]), interpolation = cv2.INTER_LINEAR)
-    
-    # Mask no_data (0,0,0) for geotiff.
+   
+    density_A = cv2.blur(density_A, template_blur_kernel_size)
+    density_B = cv2.blur(density_B, template_blur_kernel_size)
+    density   = cv2.blur(density,   template_blur_kernel_size)
+
+    # Mask no_data (0,0,0) for geotiff. For some drones (9,9,9) is no-data value.
     image_sum = np.sum(input_image_bgr, axis = 2)
-    density[image_sum == 0] = np.nan
+    density_A[image_sum < 10] = np.nan
+    density_B[image_sum < 10] = np.nan
+    density[image_sum < 10] = np.nan
 
     # Plot histograms of spectral match difference. 
     if plotting:
@@ -501,7 +570,8 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         fig, ax = plt.subplots()
         im = ax.imshow(density_A, interpolation='nearest', cmap='jet_r',
                        origin='upper',
-                       vmin=np.nanmin(density_A), vmax=np.nanmax(density_A))
+                       vmin=np.nanmin(density_A), 
+                       vmax=np.nanmax(density_A))
         ax.axis('off')
         plt.title(f'{id_str} - image RMSE with spectra A')
         plt.colorbar(im,fraction=0.046*density_A.shape[0]/density_A.shape[1], pad=0.04)
@@ -510,7 +580,8 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         fig, ax = plt.subplots()
         im = ax.imshow(density_B, interpolation='nearest', cmap='jet_r',
                        origin='upper',
-                       vmin=np.nanmin(density_B), vmax=np.nanmax(density_B))
+                       vmin=np.nanmin(density_B), 
+                       vmax=np.nanmax(density_B))
         ax.axis('off')
         plt.title(f'{id_str} - image RMSE with spectra B')
         plt.colorbar(im,fraction=0.046*density_B.shape[0]/density_B.shape[1], pad=0.04)
@@ -520,7 +591,8 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
             fig, ax = plt.subplots()
             im = ax.imshow(density, interpolation='bilinear', cmap='RdBu',
                            origin='upper',
-                           vmin=np.nanmin(density), vmax=np.nanmax(density))
+                           vmin=np.nanmin(density), 
+                           vmax=np.nanmax(density))
             ax.axis('off')
             plt.title(f'{id_str} - RMS difference of image with spectra')
             plt.colorbar(im,fraction=0.046*density.shape[0]/density.shape[1], pad=0.04)
@@ -530,7 +602,8 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         fig, ax = plt.subplots()
         im = ax.imshow(density, interpolation='bilinear', cmap='RdBu',
                        origin='upper',
-                       vmin=np.nanmin(density), vmax=np.nanmax(density))
+                       vmin=np.nanmin(density), 
+                       vmax=np.nanmax(density))
         ax.axis('off')
         plt.title(f'{id_str} - RMS difference of image with spectra')
         plt.colorbar(im,fraction=0.046*density.shape[0]/density.shape[1], pad=0.04)
@@ -542,6 +615,7 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
         mean, std = 0., np.nanstd(density_half)
     else:
         mean, std = 0., np.nanstd(density)
+
     if verbose:
         print(f'mean = {mean:.4f}, std = {std:.4f}')
 
@@ -620,7 +694,6 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
                     origin='upper', vmin=0., vmax=1.)
         ax.axis('off')
         plt.title(f'{id_str} - Spray Region')
-        plt.colorbar(im,fraction=0.046*spray_region.shape[0]/spray_region.shape[1], pad=0.04)
         plt.savefig(f'{id_str}_SPRAY_REGION.PNG')
         plt.show() 
 
@@ -629,44 +702,7 @@ try decreasing \'duplicate_tolerance\', which is currently {duplicate_tolerance}
 
 
 
-def model_post_process(image_filename, \
-    morph_open = 10, morph_close = 10, \
-    n_median_filter = 3, \
-    dilation_kernel_size = 5, dilate_iterations = 1):
-    
-    dataset = rasterio.open(image_filename)
-    img_bw = dataset.read(1).copy()
 
-    # Denoise. 
-    # se1 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_close, morph_close))
-    # se2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (morph_open, morph_open))
-
-    # mask = cv2.morphologyEx(img_bw, cv2.MORPH_CLOSE, se1)
-    # mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, se2)
-    # mask = mask < 255    
-    # img_bw *= mask
-    
-    img_bw = cv2.medianBlur(img_bw, n_median_filter)
-    
-    # Dilate.
-    kernel = np.ones((dilation_kernel_size, dilation_kernel_size), np.uint8)
-    img_bw = cv2.dilate(img_bw, kernel, iterations=dilate_iterations)
-    
-    # Export classification map to GeoTIFF.
-    output_filename = image_filename.replace('.tif',f'_DENOISED.tif')
-
-    kwargs = dataset.meta
-    kwargs.update(
-        dtype=rasterio.uint8,
-        count=1,
-        compress='lzw')
-
-    _,img_binarized = cv2.threshold(img_bw, 254, 255, cv2.THRESH_BINARY)
-    
-    with rasterio.open(output_filename, 'w', **kwargs) as dst:
-        dst.write_band(1, img_binarized)
-    
-    return
 
 
 
