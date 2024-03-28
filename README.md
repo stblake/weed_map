@@ -1,2 +1,2 @@
-# weed_map
+# Weed Mapper
 CV/ML-based detection of weeds in crops from drone imagery. 
